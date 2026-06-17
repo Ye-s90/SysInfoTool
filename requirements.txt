@@ -1,0 +1,4 @@
+wmi
+psutil
+nvidia-ml-py
+pyinstaller
