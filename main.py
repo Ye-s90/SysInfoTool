@@ -401,6 +401,9 @@ class SysInfoApp:
             time.sleep(2)
 
     def _update_monitor(self, stats):
+        # Save scroll position to prevent jumping after widget rebuild
+        scroll_pos = self.sf.canvas.yview()
+
         self.cpu_bar_set(stats["cpu_percent"])
         self.cpu_freq_lbl.config(text=f"{stats['cpu_temp_c']} °C / {stats['cpu_freq_mhz']} MHz")
 
@@ -467,6 +470,9 @@ class SysInfoApp:
             nr = stats["net_recv_mb"] - self._prev_net_io[1]
             self.net_lbl.config(text=f"发送: {ns} MB | 接收: {nr} MB")
         self._prev_net_io = (stats["net_sent_mb"], stats["net_recv_mb"])
+
+        # Restore scroll position
+        self.sf.canvas.yview_moveto(scroll_pos[0])
 
     # ==================== Recording ====================
     def _toggle_recording(self):
