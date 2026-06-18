@@ -4,9 +4,36 @@ import threading
 import time
 import csv
 import json
+import os
 import urllib.request
 from datetime import datetime
 from detector import collect_hardware, get_realtime_stats, get_system_info
+
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+DEFAULT_CONFIG = {
+    "ai_url": "https://api.openai.com",
+    "ai_key": "",
+    "ai_model": "gpt-4o",
+}
+
+
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            return {**DEFAULT_CONFIG, **cfg}
+    except Exception:
+        return dict(DEFAULT_CONFIG)
+
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 
 COLORS = {
     "bg": "#1e1e2e",
@@ -243,10 +270,12 @@ class SysInfoApp:
 
         tk.Label(ai_cfg, text="API地址:", font=("Microsoft YaHei", 9),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
+        self._ai_cfg = load_config()
+
         self.ai_url_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 9), width=30,
                                      bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"])
         self.ai_url_entry.pack(side=tk.LEFT, padx=(2, 12))
-        self.ai_url_entry.insert(0, "https://api.openai.com")
+        self.ai_url_entry.insert(0, self._ai_cfg["ai_url"])
 
         tk.Label(ai_cfg, text="API Key:", font=("Microsoft YaHei", 9),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
@@ -254,13 +283,14 @@ class SysInfoApp:
                                      bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"],
                                      show="*")
         self.ai_key_entry.pack(side=tk.LEFT, padx=(2, 12))
+        self.ai_key_entry.insert(0, self._ai_cfg["ai_key"])
 
         tk.Label(ai_cfg, text="模型:", font=("Microsoft YaHei", 9),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
         self.ai_model_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 9), width=16,
                                        bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"])
         self.ai_model_entry.pack(side=tk.LEFT, padx=(2, 12))
-        self.ai_model_entry.insert(0, "gpt-4o")
+        self.ai_model_entry.insert(0, self._ai_cfg["ai_model"])
 
         ai_btn_frame = tk.Frame(ai_card, bg=COLORS["card"])
         ai_btn_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
@@ -619,6 +649,13 @@ class SysInfoApp:
         if not self._records:
             messagebox.showwarning("提示", "没有记录数据，请先录制一段时间的监控数据")
             return
+
+        # Save config for next session
+        save_config({
+            "ai_url": self.ai_url_entry.get().strip(),
+            "ai_key": api_key,
+            "ai_model": model,
+        })
 
         self.ai_btn.config(state=tk.DISABLED)
         self.ai_status_lbl.config(text="正在分析，请稍候...")
