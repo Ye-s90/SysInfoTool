@@ -107,6 +107,12 @@ class SysInfoApp:
         self._prev_time = None
         self._gpu_widgets = []
         self._disk_widgets = []
+        self._gpu_built = False
+        self._gpu_bar = None
+        self._gpu_mem_bar = None
+        self._gpu_temp_lbl = None
+        self._gpu_vram_lbl = None
+        self._disk_device_map = {}
         self._records = []
         self._recording = False
         self._rec_interval = 2
@@ -401,59 +407,67 @@ class SysInfoApp:
             time.sleep(2)
 
     def _update_monitor(self, stats):
-        # Save scroll position to prevent jumping after widget rebuild
-        scroll_pos = self.sf.canvas.yview()
-
         self.cpu_bar_set(stats["cpu_percent"])
         self.cpu_freq_lbl.config(text=f"{stats['cpu_temp_c']} °C / {stats['cpu_freq_mhz']} MHz")
 
-        for w in self._gpu_widgets:
-            w.destroy()
-        self._gpu_widgets.clear()
+        # GPU — build once, update values in place
+        if not self._gpu_built:
+            for gpu in stats.get("gpu", []):
+                gpu_na = gpu["gpu_percent"] < 0
+                row, set_fn = usage_bar(self._gpu_area, "GPU 使用率")
+                self._gpu_bar = (row, set_fn)
+                row2, set_fn2 = usage_bar(self._gpu_area, "显存使用率")
+                self._gpu_mem_bar = (row2, set_fn2)
+                lbl2 = info_row(self._gpu_area, "GPU温度/频率", "")
+                self._gpu_temp_lbl = lbl2
+                lbl3 = info_row(self._gpu_area, "显存用量", "")
+                self._gpu_vram_lbl = lbl3
+            self._gpu_built = True
+
         for gpu in stats.get("gpu", []):
             gpu_na = gpu["gpu_percent"] < 0
-            row, set_fn = usage_bar(self._gpu_area, "GPU 使用率")
+            row, set_fn = self._gpu_bar
             if gpu_na:
                 set_fn(0); row.winfo_children()[-1].config(text="N/A")
             else:
-                set_fn(gpu["gpu_percent"])
-            self._gpu_widgets.append(row)
-
-            row2, set_fn2 = usage_bar(self._gpu_area, "显存使用率")
+                set_fn(gpu["gpu_percent"]); row.winfo_children()[-1].config(text=f"{gpu['gpu_percent']}%")
+            row2, set_fn2 = self._gpu_mem_bar
             if gpu_na:
                 set_fn2(0); row2.winfo_children()[-1].config(text="N/A")
             else:
-                set_fn2(gpu["mem_percent"])
-            self._gpu_widgets.append(row2)
-
+                set_fn2(gpu["mem_percent"]); row2.winfo_children()[-1].config(text=f"{gpu['mem_percent']}%")
             if gpu_na:
-                lbl2 = info_row(self._gpu_area, "GPU温度/频率", "N/A / N/A")
+                self._gpu_temp_lbl.config(text="N/A / N/A")
             else:
-                lbl2 = info_row(self._gpu_area, "GPU温度/频率",
-                                f"{gpu['temp_c']} °C / {gpu['clock_mhz']} MHz")
-            self._gpu_widgets.append(lbl2.master)
-
+                self._gpu_temp_lbl.config(text=f"{gpu['temp_c']} °C / {gpu['clock_mhz']} MHz")
             total_gb = gpu['mem_total_mb'] / 1024
             if gpu_na:
-                lbl3 = info_row(self._gpu_area, "显存容量", f"{total_gb:.1f} GB")
+                self._gpu_vram_lbl.config(text=f"{total_gb:.1f} GB")
             else:
                 used_gb = gpu['mem_used_mb'] / 1024
-                lbl3 = info_row(self._gpu_area, "显存用量",
-                                f"{used_gb:.1f} GB / {total_gb:.1f} GB")
-            self._gpu_widgets.append(lbl3.master)
+                self._gpu_vram_lbl.config(text=f"{used_gb:.1f} GB / {total_gb:.1f} GB")
 
         self.mem_bar_set(stats["mem_percent"])
         self.mem_detail_lbl.config(text=f"{stats['mem_used_gb']} GB / {stats['mem_total_gb']} GB")
         self.mem_freq_lbl.config(text=f"{stats['mem_freq_mhz']} MHz")
         self.swap_bar_set(stats["swap_percent"])
 
-        for w in self._disk_widgets:
-            w.destroy()
-        self._disk_widgets.clear()
+        # Disk bars — build once per device, update values
+        current_devices = [p["device"] for p in stats["disk_partitions"]]
+        if set(current_devices) != set(self._disk_device_map.keys()):
+            # Partition list changed, rebuild
+            for w in self._disk_widgets:
+                w.destroy()
+            self._disk_widgets.clear()
+            self._disk_device_map.clear()
+            for part in stats["disk_partitions"]:
+                row, set_fn = usage_bar(self._disk_area, part["device"])
+                self._disk_widgets.append(row)
+                self._disk_device_map[part["device"]] = (row, set_fn)
         for part in stats["disk_partitions"]:
-            row, set_fn = usage_bar(self._disk_area, part["device"])
-            set_fn(part["percent"])
-            self._disk_widgets.append(row)
+            if part["device"] in self._disk_device_map:
+                row, set_fn = self._disk_device_map[part["device"]]
+                set_fn(part["percent"])
 
         now = time.time()
         if self._prev_time and self._prev_disk_io:
@@ -470,9 +484,6 @@ class SysInfoApp:
             nr = stats["net_recv_mb"] - self._prev_net_io[1]
             self.net_lbl.config(text=f"发送: {ns} MB | 接收: {nr} MB")
         self._prev_net_io = (stats["net_sent_mb"], stats["net_recv_mb"])
-
-        # Restore scroll position
-        self.sf.canvas.yview_moveto(scroll_pos[0])
 
     # ==================== Recording ====================
     def _toggle_recording(self):
