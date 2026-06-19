@@ -69,7 +69,7 @@ class ScrollFrame(tk.Frame):
 def card(parent, title):
     outer = tk.Frame(parent, bg=COLORS["card"])
     outer.pack(fill=tk.X, padx=6, pady=4)
-    tk.Label(outer, text=title, font=("Microsoft YaHei", 11, "bold"),
+    tk.Label(outer, text=title, font=("Microsoft YaHei", 12, "bold"),
              fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, padx=12, pady=(8, 2))
     tk.Frame(outer, bg=COLORS["dim"], height=1).pack(fill=tk.X, padx=12, pady=(0, 6))
     body = tk.Frame(outer, bg=COLORS["card"])
@@ -80,9 +80,9 @@ def card(parent, title):
 def info_row(parent, label, value=""):
     row = tk.Frame(parent, bg=COLORS["card"])
     row.pack(fill=tk.X, pady=1)
-    tk.Label(row, text=label, font=("Microsoft YaHei", 10), fg=COLORS["dim"],
+    tk.Label(row, text=label, font=("Microsoft YaHei", 11), fg=COLORS["dim"],
              bg=COLORS["card"], width=14, anchor=tk.W).pack(side=tk.LEFT)
-    val = tk.Label(row, text=value, font=("Microsoft YaHei", 10), fg=COLORS["text"],
+    val = tk.Label(row, text=value, font=("Microsoft YaHei", 11), fg=COLORS["text"],
                    bg=COLORS["card"], anchor=tk.W)
     val.pack(side=tk.LEFT, fill=tk.X, expand=True)
     return val
@@ -91,11 +91,11 @@ def info_row(parent, label, value=""):
 def usage_bar(parent, label):
     row = tk.Frame(parent, bg=COLORS["card"])
     row.pack(fill=tk.X, pady=2)
-    tk.Label(row, text=label, font=("Microsoft YaHei", 10), fg=COLORS["dim"],
+    tk.Label(row, text=label, font=("Microsoft YaHei", 11), fg=COLORS["dim"],
              bg=COLORS["card"], width=14, anchor=tk.W).pack(side=tk.LEFT)
     bar_canvas = tk.Canvas(row, height=16, bg=COLORS["bar_bg"], highlightthickness=0, bd=0)
     bar_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-    pct_lbl = tk.Label(row, text="0%", font=("Microsoft YaHei", 10), fg=COLORS["text"],
+    pct_lbl = tk.Label(row, text="0%", font=("Microsoft YaHei", 11), fg=COLORS["text"],
                        bg=COLORS["card"], width=6)
     pct_lbl.pack(side=tk.RIGHT)
     state = {"pct": 0}
@@ -154,7 +154,7 @@ class SysInfoApp:
         # Toolbar
         toolbar = tk.Frame(self.root, bg=COLORS["bg"])
         toolbar.pack(fill=tk.X, padx=10, pady=(8, 0))
-        tk.Label(toolbar, text="SysInfo Tool", font=("Microsoft YaHei", 14, "bold"),
+        tk.Label(toolbar, text="SysInfo Tool", font=("Microsoft YaHei", 15, "bold"),
                  fg=COLORS["text"], bg=COLORS["bg"]).pack(side=tk.LEFT)
 
         # Tab buttons
@@ -162,7 +162,7 @@ class SysInfoApp:
         self.tab_btn_frame.pack(side=tk.LEFT, padx=(20, 0))
         self._tab_btns = {}
         for name in ("实时监控", "监控记录"):
-            btn = tk.Label(self.tab_btn_frame, text=name, font=("Microsoft YaHei", 10),
+            btn = tk.Label(self.tab_btn_frame, text=name, font=("Microsoft YaHei", 11),
                            fg=COLORS["text"], bg=COLORS["tab_inactive"],
                            padx=12, pady=4, cursor="hand2")
             btn.pack(side=tk.LEFT, padx=2)
@@ -170,9 +170,9 @@ class SysInfoApp:
             self._tab_btns[name] = btn
 
         tk.Button(toolbar, text="刷新", command=self._refresh_all,
-                  font=("Microsoft YaHei", 10)).pack(side=tk.RIGHT, padx=4)
+                  font=("Microsoft YaHei", 11)).pack(side=tk.RIGHT, padx=4)
         tk.Button(toolbar, text="复制全部", command=self._copy_all,
-                  font=("Microsoft YaHei", 10)).pack(side=tk.RIGHT, padx=4)
+                  font=("Microsoft YaHei", 11)).pack(side=tk.RIGHT, padx=4)
 
         # ---- Page: Monitor ----
         self.page_monitor = tk.Frame(self.root, bg=COLORS["bg"])
@@ -182,7 +182,7 @@ class SysInfoApp:
 
         self.hw_body = card(content, "硬件信息")
         self.hw_status = tk.Label(self.hw_body, text="正在检测硬件...",
-                                  font=("Microsoft YaHei", 10), fg=COLORS["dim"], bg=COLORS["card"])
+                                  font=("Microsoft YaHei", 11), fg=COLORS["dim"], bg=COLORS["card"])
         self.hw_status.pack(anchor=tk.W, pady=4)
 
         self.rt_body = card(content, "实时监控")
@@ -209,12 +209,12 @@ class SysInfoApp:
         rec_toolbar = tk.Frame(self.page_record, bg=COLORS["card"])
         rec_toolbar.pack(fill=tk.X, padx=6, pady=(6, 2))
 
-        self.rec_btn = tk.Button(rec_toolbar, text="开始记录", font=("Microsoft YaHei", 10),
+        self.rec_btn = tk.Button(rec_toolbar, text="开始记录", font=("Microsoft YaHei", 11),
                                  command=self._toggle_recording, bg=COLORS["green"],
                                  fg="#000000", relief=tk.FLAT, padx=12)
         self.rec_btn.pack(side=tk.LEFT, padx=8, pady=8)
 
-        tk.Label(rec_toolbar, text="采样间隔:", font=("Microsoft YaHei", 10),
+        tk.Label(rec_toolbar, text="采样间隔:", font=("Microsoft YaHei", 11),
                  fg=COLORS["text"], bg=COLORS["card"]).pack(side=tk.LEFT, padx=(16, 4))
         self.interval_var = tk.StringVar(value="2秒")
         interval_cb = ttk.Combobox(rec_toolbar, textvariable=self.interval_var,
@@ -223,12 +223,12 @@ class SysInfoApp:
         interval_cb.bind("<<ComboboxSelected>>", self._on_interval_change)
 
         self.rec_count_lbl = tk.Label(rec_toolbar, text="记录: 0 条",
-                                      font=("Microsoft YaHei", 10), fg=COLORS["dim"], bg=COLORS["card"])
+                                      font=("Microsoft YaHei", 11), fg=COLORS["dim"], bg=COLORS["card"])
         self.rec_count_lbl.pack(side=tk.LEFT, padx=16)
 
-        tk.Button(rec_toolbar, text="清空", font=("Microsoft YaHei", 10),
+        tk.Button(rec_toolbar, text="清空", font=("Microsoft YaHei", 11),
                   command=self._clear_records).pack(side=tk.RIGHT, padx=8, pady=8)
-        tk.Button(rec_toolbar, text="导出CSV", font=("Microsoft YaHei", 10),
+        tk.Button(rec_toolbar, text="导出CSV", font=("Microsoft YaHei", 11),
                   command=self._export_csv).pack(side=tk.RIGHT, padx=4, pady=8)
 
         # Record table
@@ -251,9 +251,9 @@ class SysInfoApp:
 
         style = ttk.Style()
         style.configure("Treeview", background=COLORS["card"], foreground=COLORS["text"],
-                        fieldbackground=COLORS["card"], font=("Microsoft YaHei", 9))
+                        fieldbackground=COLORS["card"], font=("Microsoft YaHei", 10))
         style.configure("Treeview.Heading", background=COLORS["tab_inactive"],
-                        foreground=COLORS["text"], font=("Microsoft YaHei", 9, "bold"))
+                        foreground=COLORS["text"], font=("Microsoft YaHei", 10, "bold"))
 
         vscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=vscroll.set)
@@ -263,33 +263,33 @@ class SysInfoApp:
         # ---- AI Analysis section ----
         ai_card = tk.Frame(self.page_record, bg=COLORS["card"])
         ai_card.pack(fill=tk.X, padx=6, pady=(0, 4))
-        tk.Label(ai_card, text="AI 分析", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(ai_card, text="AI 分析", font=("Microsoft YaHei", 12, "bold"),
                  fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, padx=12, pady=(8, 2))
         tk.Frame(ai_card, bg=COLORS["dim"], height=1).pack(fill=tk.X, padx=12, pady=(0, 6))
 
         ai_cfg = tk.Frame(ai_card, bg=COLORS["card"])
         ai_cfg.pack(fill=tk.X, padx=12, pady=(0, 6))
 
-        tk.Label(ai_cfg, text="API地址:", font=("Microsoft YaHei", 9),
+        tk.Label(ai_cfg, text="API地址:", font=("Microsoft YaHei", 10),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
         self._ai_cfg = load_config()
 
-        self.ai_url_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 9), width=30,
+        self.ai_url_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 10), width=30,
                                      bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"])
         self.ai_url_entry.pack(side=tk.LEFT, padx=(2, 12))
         self.ai_url_entry.insert(0, self._ai_cfg["ai_url"])
 
-        tk.Label(ai_cfg, text="API Key:", font=("Microsoft YaHei", 9),
+        tk.Label(ai_cfg, text="API Key:", font=("Microsoft YaHei", 10),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
-        self.ai_key_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 9), width=24,
+        self.ai_key_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 10), width=24,
                                      bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"],
                                      show="*")
         self.ai_key_entry.pack(side=tk.LEFT, padx=(2, 12))
         self.ai_key_entry.insert(0, self._ai_cfg["ai_key"])
 
-        tk.Label(ai_cfg, text="模型:", font=("Microsoft YaHei", 9),
+        tk.Label(ai_cfg, text="模型:", font=("Microsoft YaHei", 10),
                  fg=COLORS["dim"], bg=COLORS["card"]).pack(side=tk.LEFT)
-        self.ai_model_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 9), width=16,
+        self.ai_model_entry = tk.Entry(ai_cfg, font=("Microsoft YaHei", 10), width=16,
                                        bg=COLORS["bar_bg"], fg=COLORS["text"], insertbackground=COLORS["text"])
         self.ai_model_entry.pack(side=tk.LEFT, padx=(2, 12))
         self.ai_model_entry.insert(0, self._ai_cfg["ai_model"])
@@ -297,12 +297,12 @@ class SysInfoApp:
         ai_btn_frame = tk.Frame(ai_card, bg=COLORS["card"])
         ai_btn_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
 
-        self.ai_btn = tk.Button(ai_btn_frame, text="开始分析", font=("Microsoft YaHei", 10),
+        self.ai_btn = tk.Button(ai_btn_frame, text="开始分析", font=("Microsoft YaHei", 11),
                                 command=self._run_ai_analysis, bg=COLORS["accent"],
                                 fg="#ffffff", relief=tk.FLAT, padx=12)
         self.ai_btn.pack(side=tk.LEFT, padx=0)
 
-        self.ai_status_lbl = tk.Label(ai_btn_frame, text="", font=("Microsoft YaHei", 9),
+        self.ai_status_lbl = tk.Label(ai_btn_frame, text="", font=("Microsoft YaHei", 10),
                                       fg=COLORS["dim"], bg=COLORS["card"])
         self.ai_status_lbl.pack(side=tk.LEFT, padx=12)
 
@@ -310,7 +310,7 @@ class SysInfoApp:
         ai_resp_frame = tk.Frame(ai_card, bg=COLORS["card"])
         ai_resp_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 10))
 
-        self.ai_response = tk.Text(ai_resp_frame, font=("Microsoft YaHei", 10),
+        self.ai_response = tk.Text(ai_resp_frame, font=("Microsoft YaHei", 11),
                                    bg=COLORS["bar_bg"], fg=COLORS["text"],
                                    wrap=tk.WORD, height=10, state=tk.DISABLED,
                                    insertbackground=COLORS["text"])
@@ -320,7 +320,7 @@ class SysInfoApp:
         ai_resp_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Status bar
-        self.status = tk.Label(self.root, text="就绪", font=("Microsoft YaHei", 9),
+        self.status = tk.Label(self.root, text="就绪", font=("Microsoft YaHei", 10),
                                fg=COLORS["dim"], bg=COLORS["bg"])
         self.status.pack(fill=tk.X, padx=10, pady=(0, 6))
 
@@ -358,14 +358,14 @@ class SysInfoApp:
     def _display_hardware(self, data):
         self.hw_status.destroy()
         for cpu in data["cpu"]:
-            tk.Label(self.hw_body, text="CPU", font=("Microsoft YaHei", 11, "bold"),
+            tk.Label(self.hw_body, text="CPU", font=("Microsoft YaHei", 12, "bold"),
                      fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, pady=(4, 2))
             info_row(self.hw_body, "名称", cpu["name"])
             info_row(self.hw_body, "制造商", cpu["manufacturer"])
             info_row(self.hw_body, "核心/线程", f"{cpu['cores']} 核 / {cpu['threads']} 线程")
             info_row(self.hw_body, "最大频率", f"{cpu['max_clock_mhz']} MHz")
 
-        tk.Label(self.hw_body, text="GPU", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(self.hw_body, text="GPU", font=("Microsoft YaHei", 12, "bold"),
                  fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, pady=(10, 2))
         multi_gpu = len(data["gpu"]) > 1
         for i, gpu in enumerate(data["gpu"], 1):
@@ -375,7 +375,7 @@ class SysInfoApp:
             info_row(self.hw_body, f"显存{sfx}", vram)
             info_row(self.hw_body, f"驱动版本{sfx}", gpu["driver_version"])
 
-        tk.Label(self.hw_body, text="内存", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(self.hw_body, text="内存", font=("Microsoft YaHei", 12, "bold"),
                  fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, pady=(10, 2))
         total_mem = sum(s["capacity_gb"] for s in data["memory"])
         info_row(self.hw_body, "总容量", f"{total_mem} GB")
@@ -385,7 +385,7 @@ class SysInfoApp:
             info_row(self.hw_body, f"型号{sfx}", f"{stick['manufacturer']} {stick['part_number']}")
             info_row(self.hw_body, f"容量/频率{sfx}", f"{stick['capacity_gb']} GB / {stick['speed_mhz']} MHz")
 
-        tk.Label(self.hw_body, text="硬盘", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(self.hw_body, text="硬盘", font=("Microsoft YaHei", 12, "bold"),
                  fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, pady=(10, 2))
         multi_disk = len(data["disk"]) > 1
         for i, disk in enumerate(data["disk"], 1):
@@ -414,7 +414,7 @@ class SysInfoApp:
         info_row(self.sys_body, "架构", data["machine_arch"])
         info_row(self.sys_body, "Python", data["python_version"])
         info_row(self.sys_body, "启动时间", data["boot_time"])
-        tk.Label(self.sys_body, text="网络适配器", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(self.sys_body, text="网络适配器", font=("Microsoft YaHei", 12, "bold"),
                  fg=COLORS["section"], bg=COLORS["card"]).pack(anchor=tk.W, pady=(8, 2))
         for adapter in data["adapters"]:
             if adapter["name"].startswith("Loopback"):
