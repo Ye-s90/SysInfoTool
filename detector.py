@@ -3,13 +3,68 @@ import pythoncom
 import psutil
 import platform
 import socket
+import hashlib
+import threading
 from datetime import datetime
+
+try:
+    import mss
+    _HAS_MSS = True
+except ImportError:
+    _HAS_MSS = False
 
 try:
     import pynvml
     _HAS_NVML = True
 except ImportError:
     _HAS_NVML = False
+
+
+class FPSCounter:
+    """Monitor screen FPS by detecting frame changes via screen capture."""
+
+    def __init__(self):
+        self.fps = 0
+        self._running = False
+        self._frame_count = 0
+        self._last_hash = None
+
+    def start(self):
+        if not _HAS_MSS:
+            return
+        self._running = True
+        threading.Thread(target=self._count_loop, daemon=True).start()
+
+    def stop(self):
+        self._running = False
+
+    def _count_loop(self):
+        sct = mss.mss()
+        monitor = sct.monitors[1]  # Primary monitor
+        # Capture a small region in the center to reduce overhead
+        cx, cy = monitor["width"] // 2, monitor["height"] // 2
+        region = {"left": cx - 160, "top": cy - 120, "width": 320, "height": 240}
+
+        while self._running:
+            try:
+                img = sct.grab(region)
+                h = hashlib.md5(img.rgb).hexdigest()
+                if h != self._last_hash:
+                    self._frame_count += 1
+                    self._last_hash = h
+            except Exception:
+                pass
+
+    def get_fps(self):
+        """Return current FPS and reset counter. Called once per second."""
+        fps = self._frame_count
+        self._frame_count = 0
+        self.fps = fps
+        return fps
+
+
+# Global FPS counter instance
+_fps_counter = FPSCounter()
 
 
 # ==================== Hardware Info ====================
@@ -276,10 +331,16 @@ def _get_mem_freq():
 
 
 def get_realtime_stats():
+    global _fps_counter
+    # Start FPS counter on first call
+    if _HAS_MSS and not _fps_counter._running:
+        _fps_counter.start()
+
     cpu_percent = psutil.cpu_percent(interval=0.3, percpu=False)
     cpu_freq_current = _get_cpu_freq_mhz()
     cpu_temp = _get_cpu_temp()
     mem_freq = _get_mem_freq()
+    fps = _fps_counter.get_fps() if _HAS_MSS else -1
 
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
@@ -316,6 +377,7 @@ def get_realtime_stats():
         "disk_write_mb": round(disk_io.write_bytes / (1024**2)) if disk_io else 0,
         "net_sent_mb": round(net_io.bytes_sent / (1024**2)) if net_io else 0,
         "net_recv_mb": round(net_io.bytes_recv / (1024**2)) if net_io else 0,
+        "fps": fps,
         "gpu": get_gpu_realtime(),
     }
 

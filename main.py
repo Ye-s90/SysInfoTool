@@ -198,6 +198,7 @@ class SysInfoApp:
         self._disk_area.pack(fill=tk.X, pady=0)
         self.disk_io_lbl = info_row(self.rt_body, "磁盘 I/O")
         self.net_lbl = info_row(self.rt_body, "网络流量")
+        self.fps_lbl = info_row(self.rt_body, "屏幕帧数")
 
         self.sys_body = card(content, "系统信息")
 
@@ -235,13 +236,14 @@ class SysInfoApp:
         table_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(2, 6))
 
         columns = ("time", "cpu_pct", "cpu_temp", "cpu_freq",
-                   "gpu_pct", "gpu_temp", "gpu_mem", "mem_pct", "mem_freq")
+                   "gpu_pct", "gpu_temp", "gpu_mem", "mem_pct", "mem_freq", "fps")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
 
         headers = {
             "time": ("时间", 140), "cpu_pct": ("CPU%", 55), "cpu_temp": ("CPU温度", 65),
             "cpu_freq": ("CPU频率", 70), "gpu_pct": ("GPU%", 55), "gpu_temp": ("GPU温度", 65),
             "gpu_mem": ("显存%", 55), "mem_pct": ("内存%", 55), "mem_freq": ("内存频率", 70),
+            "fps": ("FPS", 50),
         }
         for col, (text, width) in headers.items():
             self.tree.heading(col, text=text)
@@ -515,6 +517,13 @@ class SysInfoApp:
             self.net_lbl.config(text=f"发送: {ns} MB | 接收: {nr} MB")
         self._prev_net_io = (stats["net_sent_mb"], stats["net_recv_mb"])
 
+        # FPS
+        fps = stats.get("fps", -1)
+        if fps < 0:
+            self.fps_lbl.config(text="N/A")
+        else:
+            self.fps_lbl.config(text=f"{fps} FPS")
+
     # ==================== Recording ====================
     def _toggle_recording(self):
         self._recording = not self._recording
@@ -531,6 +540,7 @@ class SysInfoApp:
 
     def _record_snapshot(self, stats):
         gpu = stats.get("gpu", [{}])[0] if stats.get("gpu") else {}
+        fps = stats.get("fps", -1)
         record = {
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "cpu_pct": stats["cpu_percent"],
@@ -541,6 +551,7 @@ class SysInfoApp:
             "gpu_mem": gpu.get("mem_percent", "N/A"),
             "mem_pct": stats["mem_percent"],
             "mem_freq": stats["mem_freq_mhz"],
+            "fps": fps,
         }
         self._records.append(record)
         self.tree.insert("", tk.END, values=(
@@ -550,6 +561,7 @@ class SysInfoApp:
             "N/A" if record["gpu_temp"] < 0 else f"{record['gpu_temp']} °C",
             "N/A" if record["gpu_mem"] < 0 else record["gpu_mem"],
             record["mem_pct"], f"{record['mem_freq']} MHz",
+            "N/A" if fps < 0 else fps,
         ))
         # Auto-scroll to bottom
         children = self.tree.get_children()
@@ -577,14 +589,16 @@ class SysInfoApp:
             with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
                 writer.writerow(["时间", "CPU%", "CPU温度(°C)", "CPU频率(MHz)",
-                                 "GPU%", "GPU温度(°C)", "显存%", "内存%", "内存频率(MHz)"])
+                                 "GPU%", "GPU温度(°C)", "显存%", "内存%", "内存频率(MHz)", "FPS"])
                 for r in self._records:
+                    fps = r.get("fps", -1)
                     writer.writerow([
                         r["time"], r["cpu_pct"], r["cpu_temp"], r["cpu_freq"],
                         "N/A" if r["gpu_pct"] < 0 else r["gpu_pct"],
                         "N/A" if r["gpu_temp"] < 0 else r["gpu_temp"],
                         "N/A" if r["gpu_mem"] < 0 else r["gpu_mem"],
                         r["mem_pct"], r["mem_freq"],
+                        "N/A" if fps < 0 else fps,
                     ])
             messagebox.showinfo("提示", f"已导出到:\n{filepath}")
         except Exception as e:
@@ -615,14 +629,16 @@ class SysInfoApp:
 
     def _build_csv_text(self):
         """Build CSV text from records for AI prompt."""
-        lines = ["时间,CPU%,CPU温度(°C),CPU频率(MHz),GPU%,GPU温度(°C),显存%,内存%,内存频率(MHz)"]
+        lines = ["时间,CPU%,CPU温度(°C),CPU频率(MHz),GPU%,GPU温度(°C),显存%,内存%,内存频率(MHz),FPS"]
         for r in self._records:
+            fps = r.get("fps", -1)
             lines.append(",".join([
                 r["time"], str(r["cpu_pct"]), str(r["cpu_temp"]), str(r["cpu_freq"]),
                 "N/A" if r["gpu_pct"] < 0 else str(r["gpu_pct"]),
                 "N/A" if r["gpu_temp"] < 0 else str(r["gpu_temp"]),
                 "N/A" if r["gpu_mem"] < 0 else str(r["gpu_mem"]),
                 str(r["mem_pct"]), str(r["mem_freq"]),
+                "N/A" if fps < 0 else str(fps),
             ]))
         return "\n".join(lines)
 
@@ -672,8 +688,10 @@ class SysInfoApp:
 
         system_prompt = (
             "你是一个专业的电脑硬件分析师。用户会提供电脑的硬件配置信息和一段时间内的硬件监控数据（CPU使用率、温度、频率，"
-            "GPU使用率、温度、显存占用，内存使用率、频率等）。请分析这些数据，找出可能的性能瓶颈或异常，"
-            "例如：CPU/GPU是否过热导致降频、内存是否不足、显存是否溢出等。"
+            "GPU使用率、温度、显存占用，内存使用率、频率，屏幕帧数FPS等）。请分析这些数据，找出可能的性能瓶颈或异常，"
+            "例如：CPU/GPU是否过热导致降频、内存是否不足、显存是否溢出、FPS波动是否与CPU/GPU负载或温度相关等。"
+            "特别关注FPS数据：如果FPS突然下降，结合同一时刻的CPU/GPU温度、使用率、频率变化来分析掉帧原因；"
+            "如果FPS持续偏低，分析是CPU瓶颈还是GPU瓶颈。"
             "如果用户提到具体问题（如游戏掉帧），请结合数据给出可能的原因和优化建议。"
             "请用中文回答，条理清晰。"
         )

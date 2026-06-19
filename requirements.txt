@@ -1,4 +1,5 @@
 wmi
 psutil
 nvidia-ml-py
+mss
 pyinstaller
