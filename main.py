@@ -186,6 +186,7 @@ class SysInfoApp:
         self.hw_status.pack(anchor=tk.W, pady=4)
 
         self.rt_body = card(content, "实时监控")
+        self.fps_lbl = info_row(self.rt_body, "屏幕帧数")
         self.cpu_bar_row, self.cpu_bar_set = usage_bar(self.rt_body, "CPU 使用率")
         self.cpu_freq_lbl = info_row(self.rt_body, "CPU温度/频率")
         self._gpu_area = tk.Frame(self.rt_body, bg=COLORS["card"])
@@ -198,7 +199,6 @@ class SysInfoApp:
         self._disk_area.pack(fill=tk.X, pady=0)
         self.disk_io_lbl = info_row(self.rt_body, "磁盘 I/O")
         self.net_lbl = info_row(self.rt_body, "网络流量")
-        self.fps_lbl = info_row(self.rt_body, "屏幕帧数")
 
         self.sys_body = card(content, "系统信息")
 
@@ -688,11 +688,14 @@ class SysInfoApp:
 
         system_prompt = (
             "你是一个专业的电脑硬件分析师。用户会提供电脑的硬件配置信息和一段时间内的硬件监控数据（CPU使用率、温度、频率，"
-            "GPU使用率、温度、显存占用，内存使用率、频率，屏幕帧数FPS等）。请分析这些数据，找出可能的性能瓶颈或异常，"
-            "例如：CPU/GPU是否过热导致降频、内存是否不足、显存是否溢出、FPS波动是否与CPU/GPU负载或温度相关等。"
-            "特别关注FPS数据：如果FPS突然下降，结合同一时刻的CPU/GPU温度、使用率、频率变化来分析掉帧原因；"
-            "如果FPS持续偏低，分析是CPU瓶颈还是GPU瓶颈。"
-            "如果用户提到具体问题（如游戏掉帧），请结合数据给出可能的原因和优化建议。"
+            "GPU使用率、温度、显存占用，内存使用率、频率，屏幕帧数FPS等）。\n\n"
+            "分析步骤：\n"
+            "1. 首先根据FPS数据判断用户在各时间段的状态：FPS为0或接近0表示桌面空闲；FPS稳定在30-60+表示可能在看视频或轻量应用；"
+            "FPS在60以上且GPU使用率显著升高表示在游戏中；FPS波动剧烈表示可能存在性能问题。\n"
+            "2. 对于游戏时间段，重点分析FPS波动与CPU/GPU温度、使用率、频率的关联：FPS突然下降时检查是否有温度墙限频（CPU/GPU温度过高）、"
+            "GPU使用率是否打满（GPU瓶颈）、CPU使用率是否打满（CPU瓶颈）、显存是否溢出等。\n"
+            "3. 对于非游戏时间段，关注温度是否异常、资源占用是否合理。\n"
+            "4. 综合给出优化建议。\n\n"
             "请用中文回答，条理清晰。"
         )
 
