@@ -5,11 +5,24 @@ import time
 import csv
 import json
 import os
+import sys
 import urllib.request
 from datetime import datetime
 from detector import collect_hardware, get_realtime_stats, get_system_info
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+def _get_config_dir():
+    """Directory where config.json should live.
+    Bundled exe -> next to the exe (PyInstaller onefile unpacks to a temp
+    dir pointed at by __file__, which would lose settings on every run).
+    Source mode -> next to main.py.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_FILE = os.path.join(_get_config_dir(), "config.json")
 
 DEFAULT_CONFIG = {
     "ai_url": "https://api.openai.com",
@@ -121,6 +134,97 @@ def usage_bar(parent, label):
     return row, set_pct
 
 
+class FloatMonitor:
+    """Always-on-top overlay showing live CPU/GPU/memory stats in the top-left corner.
+
+    - Borderless, semi-transparent, always on top.
+    - One compact row: CPU usage/temp, GPU usage/temp/VRAM, memory usage.
+    - Draggable by mouse; closable via the small ✕ button.
+    """
+
+    def __init__(self, root, on_close=None):
+        self.root = root
+        self._on_close = on_close
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)          # No title bar / borders
+        self.win.attributes("-topmost", True)    # Always on top
+        self.win.attributes("-alpha", 0.92)      # Slightly transparent
+        self.win.configure(bg=COLORS["bg"], highlightthickness=1,
+                           highlightbackground=COLORS["accent"])
+
+        self.label = tk.Label(self.win,
+                              text="CPU --% --°C | GPU --% --°C --/--GB | MEM --%",
+                              font=("Microsoft YaHei", 15),
+                              fg=COLORS["text"], bg=COLORS["bg"],
+                              padx=12, pady=4)
+        self.label.pack(side=tk.LEFT)
+
+        self.close_btn = tk.Label(self.win, text=" ✕ ",
+                                  font=("Microsoft YaHei", 15, "bold"),
+                                  fg=COLORS["dim"], bg=COLORS["bg"], cursor="hand2")
+        self.close_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        self.close_btn.bind("<Button-1>", lambda e: self.close())
+
+        # Start at the top-left corner with a small margin
+        self.win.geometry("+10+10")
+
+        # Dragging
+        self._drag_off = (0, 0)
+        for w in (self.win, self.label):
+            w.bind("<Button-1>", self._start_drag)
+            w.bind("<B1-Motion>", self._on_drag)
+
+    def _start_drag(self, event):
+        self._drag_off = (event.x_root - self.win.winfo_x(),
+                          event.y_root - self.win.winfo_y())
+
+    def _on_drag(self, event):
+        x = event.x_root - self._drag_off[0]
+        y = event.y_root - self._drag_off[1]
+        self.win.geometry(f"+{x}+{y}")
+
+    def update_stats(self, stats):
+        """Refresh the overlay text. Called from the main thread (via after())."""
+        # Guard against a queued update landing after the window was closed
+        try:
+            if not self.win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        def _num(v, default=-1):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return default
+
+        cpu_pct = _num(stats.get("cpu_percent"), 0)
+        cpu_temp = _num(stats.get("cpu_temp_c"), 0)
+        mem_pct = _num(stats.get("mem_percent"), 0)
+        gpu = stats.get("gpu", [{}])[0] if stats.get("gpu") else {}
+        gpu_pct = _num(gpu.get("gpu_percent"))
+        gpu_temp = _num(gpu.get("temp_c"))
+        gpu_used = _num(gpu.get("mem_used_mb"), 0)
+        gpu_total = _num(gpu.get("mem_total_mb"), 0)
+
+        cpu_temp_s = f"{cpu_temp}°C" if cpu_temp > 0 else "--°C"
+        if gpu_pct < 0:
+            gpu_s = "GPU --% --°C"
+        else:
+            gpu_temp_s = f"{gpu_temp}°C" if gpu_temp > 0 else "--°C"
+            vram_s = f"{gpu_used / 1024:.1f}/{gpu_total / 1024:.1f}GB" if gpu_total > 0 else "--/--GB"
+            gpu_s = f"GPU {gpu_pct}% {gpu_temp_s} {vram_s}"
+        self.label.config(text=f"CPU {cpu_pct}% {cpu_temp_s} | {gpu_s} | MEM {mem_pct}%")
+
+    def close(self):
+        cb = self._on_close
+        try:
+            self.win.destroy()
+        finally:
+            if cb:
+                cb(self)
+
+
 class SysInfoApp:
     def __init__(self, root):
         self.root = root
@@ -143,6 +247,7 @@ class SysInfoApp:
         self._records = []
         self._recording = False
         self._rec_interval = 2
+        self._overlay = None
 
         self._build_ui()
         self._load_hardware()
@@ -169,6 +274,9 @@ class SysInfoApp:
             btn.bind("<Button-1>", lambda e, n=name: self._switch_tab(n))
             self._tab_btns[name] = btn
 
+        self.overlay_btn = tk.Button(toolbar, text="悬浮窗", command=self._toggle_overlay,
+                                     font=("Microsoft YaHei", 12))
+        self.overlay_btn.pack(side=tk.RIGHT, padx=4)
         tk.Button(toolbar, text="刷新", command=self._refresh_all,
                   font=("Microsoft YaHei", 12)).pack(side=tk.RIGHT, padx=4)
         tk.Button(toolbar, text="复制全部", command=self._copy_all,
@@ -427,24 +535,48 @@ class SysInfoApp:
         threading.Thread(target=self._monitor_loop, daemon=True).start()
 
     def _monitor_loop(self):
+        last_rec = 0.0
         while self._running:
             try:
                 stats = get_realtime_stats()
                 self.root.after(0, self._update_monitor, stats)
-                # Recording
-                if self._recording:
+                # Float overlay, if visible
+                if self._overlay:
+                    self.root.after(0, self._overlay.update_stats, stats)
+                # Recording — throttle by the user-selected interval
+                # (1/2/5 seconds), independent of the UI refresh cadence.
+                now = time.time()
+                if self._recording and (now - last_rec) >= self._rec_interval:
+                    last_rec = now
                     self.root.after(0, self._record_snapshot, stats)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1)
+
+    # ==================== Float overlay ====================
+    def _toggle_overlay(self):
+        if self._overlay:
+            self._overlay.close()
+            return
+        self._overlay = FloatMonitor(self.root, on_close=self._on_overlay_closed)
+        self.overlay_btn.config(text="关闭悬浮窗")
+        self.status.config(text="悬浮窗已开启 (拖动可移动位置)")
+
+    def _on_overlay_closed(self, overlay):
+        if self._overlay is overlay:
+            self._overlay = None
+        self.overlay_btn.config(text="悬浮窗")
+        self.status.config(text="悬浮窗已关闭")
 
     def _update_monitor(self, stats):
         self.cpu_bar_set(stats["cpu_percent"])
         self.cpu_freq_lbl.config(text=f"{stats['cpu_temp_c']} °C / {stats['cpu_freq_mhz']} MHz")
 
         # GPU — build once, update values in place
-        if not self._gpu_built:
-            for gpu in stats.get("gpu", []):
+        # Only mark built when there is actually a GPU to build for;
+        # otherwise a later sample with GPU data would never render.
+        if not self._gpu_built and stats.get("gpu"):
+            for gpu in stats["gpu"]:
                 gpu_na = gpu["gpu_percent"] < 0
                 row, set_fn = usage_bar(self._gpu_area, "GPU 使用率")
                 self._gpu_bar = (row, set_fn)
@@ -541,14 +673,24 @@ class SysInfoApp:
     def _record_snapshot(self, stats):
         gpu = stats.get("gpu", [{}])[0] if stats.get("gpu") else {}
         fps = stats.get("fps", -1)
+
+        def _gpu_val(key):
+            """GPU metric as int, or -1 when unavailable/invalid.
+            Avoids comparing a string like "N/A" with ints (TypeError)."""
+            v = gpu.get(key, -1)
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return -1
+
         record = {
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "cpu_pct": stats["cpu_percent"],
             "cpu_temp": stats["cpu_temp_c"],
             "cpu_freq": stats["cpu_freq_mhz"],
-            "gpu_pct": gpu.get("gpu_percent", "N/A"),
-            "gpu_temp": gpu.get("temp_c", "N/A"),
-            "gpu_mem": gpu.get("mem_percent", "N/A"),
+            "gpu_pct": _gpu_val("gpu_percent"),
+            "gpu_temp": _gpu_val("temp_c"),
+            "gpu_mem": _gpu_val("mem_percent"),
             "mem_pct": stats["mem_percent"],
             "mem_freq": stats["mem_freq_mhz"],
             "fps": fps,
@@ -775,6 +917,9 @@ class SysInfoApp:
 
     def _on_close(self):
         self._running = False
+        if self._overlay:
+            self._overlay.close()
+            self._overlay = None
         self.root.destroy()
 
 

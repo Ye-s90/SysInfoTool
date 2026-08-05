@@ -5,6 +5,7 @@ import platform
 import socket
 import hashlib
 import threading
+import time
 from datetime import datetime
 
 try:
@@ -28,6 +29,7 @@ class FPSCounter:
         self._running = False
         self._frame_count = 0
         self._last_hash = None
+        self._last_time = None
 
     def start(self):
         if not _HAS_MSS:
@@ -54,11 +56,19 @@ class FPSCounter:
                     self._last_hash = h
             except Exception:
                 pass
+            # Cap sampling rate to keep CPU usage reasonable
+            time.sleep(0.01)
 
     def get_fps(self):
-        """Return current FPS and reset counter. Called once per second."""
-        fps = self._frame_count
+        """Return FPS normalized to per-second since the last call."""
+        now = time.time()
+        if self._last_time is None:
+            self._last_time = now
+            return 0
+        dt = now - self._last_time
+        fps = self._frame_count / dt if dt > 0 else 0
         self._frame_count = 0
+        self._last_time = now
         self.fps = fps
         return fps
 
@@ -340,7 +350,7 @@ def get_realtime_stats():
     cpu_freq_current = _get_cpu_freq_mhz()
     cpu_temp = _get_cpu_temp()
     mem_freq = _get_mem_freq()
-    fps = _fps_counter.get_fps() if _HAS_MSS else -1
+    fps = round(_fps_counter.get_fps()) if _HAS_MSS else -1
 
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
