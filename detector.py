@@ -50,14 +50,16 @@ class FPSCounter:
         while self._running:
             try:
                 img = sct.grab(region)
-                h = hashlib.md5(img.rgb).hexdigest()
+                # Hash a sampled slice instead of the full frame (~2x faster
+                # md5, still reliably detects frame changes).
+                h = hashlib.md5(img.rgb[::2]).hexdigest()
                 if h != self._last_hash:
                     self._frame_count += 1
                     self._last_hash = h
             except Exception:
                 pass
-            # Cap sampling rate to keep CPU usage reasonable
-            time.sleep(0.01)
+            # ~66 Hz sampling cap: balances FPS accuracy vs CPU usage
+            time.sleep(0.015)
 
     def get_fps(self):
         """Return FPS normalized to per-second since the last call."""
@@ -79,6 +81,31 @@ _fps_counter = FPSCounter()
 
 # ==================== Hardware Info ====================
 
+_nvml_lock = threading.Lock()
+_nvml_inited = False
+
+
+def _ensure_nvml():
+    """Initialize NVML once per process (nvmlInit is expensive).
+
+    Returns True when NVML is available and initialized. Safe to call
+    from multiple threads; the lock guards the first-time init only.
+    """
+    global _nvml_inited
+    if _nvml_inited:
+        return True
+    if not _HAS_NVML:
+        return False
+    with _nvml_lock:
+        if not _nvml_inited:
+            try:
+                pynvml.nvmlInit()
+                _nvml_inited = True
+            except Exception:
+                return False
+    return True
+
+
 def get_cpu_info():
     c = wmi.WMI()
     cpus = []
@@ -96,10 +123,9 @@ def get_cpu_info():
 def _get_nvml_vram_mb():
     """Get VRAM for each NVIDIA GPU via NVML. Returns list of (name, vram_mb)."""
     results = []
-    if not _HAS_NVML:
+    if not _ensure_nvml():
         return results
     try:
-        pynvml.nvmlInit()
         count = pynvml.nvmlDeviceGetCount()
         for i in range(count):
             h = pynvml.nvmlDeviceGetHandleByIndex(i)
@@ -107,7 +133,6 @@ def _get_nvml_vram_mb():
             name = name_raw.decode("utf-8") if isinstance(name_raw, bytes) else name_raw
             mem = pynvml.nvmlDeviceGetMemoryInfo(h)
             results.append((name, mem.total // (1024 * 1024)))
-        pynvml.nvmlShutdown()
     except Exception:
         pass
     return results
@@ -230,10 +255,9 @@ def get_gpu_realtime():
     iGPU-only mode   -> use display-driving GPU via WMI.
     """
     gpus = []
-    # Try NVIDIA dGPU first via NVML
-    if _HAS_NVML:
+    # Try NVIDIA dGPU first via NVML (initialized once per process)
+    if _ensure_nvml():
         try:
-            pynvml.nvmlInit()
             count = pynvml.nvmlDeviceGetCount()
             for i in range(count):
                 h = pynvml.nvmlDeviceGetHandleByIndex(i)
@@ -261,7 +285,6 @@ def get_gpu_realtime():
                     "mem_used_mb": mem_used_mb,
                     "mem_total_mb": mem_total_mb,
                 })
-            pynvml.nvmlShutdown()
         except Exception:
             pass
 
@@ -271,8 +294,27 @@ def get_gpu_realtime():
     return gpus
 
 
+# Short-lived caches for slow WMI readings (monitor loop refreshes ~1s;
+# temps/frequencies change slowly, so re-querying every 2s is plenty).
+# The monitor loop is the only consumer -> single-threaded access is safe.
+_SLOW_TTL = 2.0
+_cpu_temp_cache = {"t": 0.0, "v": 0}
+_cpu_freq_cache = {"t": 0.0, "v": 0}
+_mem_freq_cache = {"t": 0.0, "v": 0}
+
+
+def _cache_result(cache, now, value):
+    cache["t"] = now
+    cache["v"] = value
+    return value
+
+
 def _get_cpu_temp():
     """Read CPU temperature. Tries multiple methods for Intel/AMD compatibility."""
+    now = time.time()
+    if now - _cpu_temp_cache["t"] < _SLOW_TTL:
+        return _cpu_temp_cache["v"]
+
     pythoncom.CoInitialize()
 
     # Method 1: MSAcpi_ThermalZoneTemperature (most accurate, may need admin)
@@ -282,7 +324,7 @@ def _get_cpu_temp():
             val = int(t.CurrentTemperature)
             celsius = (val - 2732) / 10.0
             if 0 < celsius < 150:
-                return round(celsius, 1)
+                return _cache_result(_cpu_temp_cache, now, round(celsius, 1))
     except Exception:
         pass
 
@@ -294,7 +336,7 @@ def _get_cpu_temp():
             if val > 0:
                 celsius = val / 10.0 - 273.15
                 if 0 < celsius < 150:
-                    return round(celsius, 1)
+                    return _cache_result(_cpu_temp_cache, now, round(celsius, 1))
     except Exception:
         pass
 
@@ -303,15 +345,19 @@ def _get_cpu_temp():
         c = wmi.WMI(namespace=r"root/OpenHardwareMonitor")
         for sensor in c.Sensor():
             if sensor.SensorType == "Temperature" and "CPU" in sensor.Name:
-                return round(float(sensor.Value), 1)
+                return _cache_result(_cpu_temp_cache, now, round(float(sensor.Value), 1))
     except Exception:
         pass
 
-    return 0
+    return _cache_result(_cpu_temp_cache, now, 0)
 
 
 def _get_cpu_freq_mhz():
     """Read actual CPU frequency including boost via ProcessorInformation WMI."""
+    now = time.time()
+    if now - _cpu_freq_cache["t"] < _SLOW_TTL:
+        return _cpu_freq_cache["v"]
+
     pythoncom.CoInitialize()
     try:
         c = wmi.WMI(namespace=r"root/cimv2")
@@ -320,24 +366,29 @@ def _get_cpu_freq_mhz():
                 base = int(p.ProcessorFrequency)
                 perf_pct = int(p.PercentProcessorPerformance)
                 if base > 0 and perf_pct > 0:
-                    return round(base * perf_pct / 100)
+                    return _cache_result(_cpu_freq_cache, now, round(base * perf_pct / 100))
     except Exception:
         pass
     # Fallback to psutil
     freq = psutil.cpu_freq()
-    return round(freq.current) if freq else 0
+    result = round(freq.current) if freq else 0
+    return _cache_result(_cpu_freq_cache, now, result)
 
 
 def _get_mem_freq():
     """Read actual memory frequency via WMI (ConfiguredClockSpeed)."""
+    now = time.time()
+    if now - _mem_freq_cache["t"] < _SLOW_TTL:
+        return _mem_freq_cache["v"]
+
     try:
         pythoncom.CoInitialize()
         c = wmi.WMI()
         freqs = [int(stick.ConfiguredClockSpeed) for stick in c.Win32_PhysicalMemory()
                  if stick.ConfiguredClockSpeed]
-        return freqs[0] if freqs else 0
+        return _cache_result(_mem_freq_cache, now, freqs[0] if freqs else 0)
     except Exception:
-        return 0
+        return _cache_result(_mem_freq_cache, now, 0)
 
 
 def get_realtime_stats():
@@ -346,7 +397,9 @@ def get_realtime_stats():
     if _HAS_MSS and not _fps_counter._running:
         _fps_counter.start()
 
-    cpu_percent = psutil.cpu_percent(interval=0.3, percpu=False)
+    # interval=None -> non-blocking; returns average since the previous call
+    # (first call yields 0.0). Saves ~0.3s of blocking per monitor tick.
+    cpu_percent = psutil.cpu_percent(interval=None, percpu=False)
     cpu_freq_current = _get_cpu_freq_mhz()
     cpu_temp = _get_cpu_temp()
     mem_freq = _get_mem_freq()

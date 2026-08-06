@@ -153,7 +153,7 @@ class FloatMonitor:
                            highlightbackground=COLORS["accent"])
 
         self.label = tk.Label(self.win,
-                              text="CPU --% --°C | GPU --% --°C --/--GB | MEM --%",
+                              text="FPS -- | CPU --% --°C | GPU --% --°C --/--GB | MEM --%",
                               font=("Microsoft YaHei", 15),
                               fg=COLORS["text"], bg=COLORS["bg"],
                               padx=12, pady=4)
@@ -198,6 +198,8 @@ class FloatMonitor:
             except (TypeError, ValueError):
                 return default
 
+        fps = _num(stats.get("fps"), -1)
+        fps_s = f"FPS {fps}" if fps >= 0 else "FPS --"
         cpu_pct = _num(stats.get("cpu_percent"), 0)
         cpu_temp = _num(stats.get("cpu_temp_c"), 0)
         mem_pct = _num(stats.get("mem_percent"), 0)
@@ -214,7 +216,8 @@ class FloatMonitor:
             gpu_temp_s = f"{gpu_temp}°C" if gpu_temp > 0 else "--°C"
             vram_s = f"{gpu_used / 1024:.1f}/{gpu_total / 1024:.1f}GB" if gpu_total > 0 else "--/--GB"
             gpu_s = f"GPU {gpu_pct}% {gpu_temp_s} {vram_s}"
-        self.label.config(text=f"CPU {cpu_pct}% {cpu_temp_s} | {gpu_s} | MEM {mem_pct}%")
+        self.label.config(
+            text=f"{fps_s} | CPU {cpu_pct}% {cpu_temp_s} | {gpu_s} | MEM {mem_pct}%")
 
     def close(self):
         cb = self._on_close
