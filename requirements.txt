@@ -2,4 +2,5 @@ wmi
 psutil
 nvidia-ml-py
 mss
+pywin32
 pyinstaller

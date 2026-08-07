@@ -6,6 +6,7 @@ import socket
 import hashlib
 import threading
 import time
+import re
 from datetime import datetime
 
 try:
@@ -219,8 +220,169 @@ def collect_hardware():
 
 # ==================== Real-time Monitoring ====================
 
+# Windows built-in GPU Engine perf counters (vendor-agnostic: works for
+# NVIDIA / AMD / Intel dGPU & iGPU). Utilization matches Task Manager.
+# Implemented with a persistent PDH query (pywin32); the WMI enumeration is
+# kept as a fallback for systems without pywin32.
+_gpu_engine_cache = {"t": 0.0, "v": {}}
+
+# Rebuild the PDH counter set this often to follow process churn.
+_PDH_REBUILD_TTL = 10.0
+
+_ENGINE_NAME_RE = re.compile(
+    r"pid_\d+_luid_(0x[0-9a-fA-F]+_0x[0-9a-fA-F]+)_phys_\d+_eng_\d+_engtype_3D"
+)
+
+try:
+    import win32pdh
+    _HAS_PDH = True
+except ImportError:
+    _HAS_PDH = False
+
+_pdh_state = {
+    "query": None,
+    "counters": {},   # instance name -> counter handle
+    "built_at": 0.0,
+}
+
+
+def _pdh_build_query():
+    """(Re)build the persistent PDH query against current GPU Engine instances."""
+    st = _pdh_state
+    try:
+        if st["query"] is not None:
+            win32pdh.CloseQuery(st["query"])
+        for hc in st["counters"].values():
+            try:
+                win32pdh.RemoveCounter(hc)
+            except Exception:
+                pass
+        st["query"] = None
+        st["counters"] = {}
+
+        _, instances = win32pdh.EnumObjectItems(None, None, "GPU Engine",
+                                                win32pdh.PERF_DETAIL_WIZARD)
+        eng3d = [i for i in instances if i.endswith("engtype_3D")]
+        if not eng3d:
+            return
+        hq = win32pdh.OpenQuery()
+        st["query"] = hq
+        for inst in eng3d:
+            path = r"\GPU Engine(" + inst + r")\Utilization Percentage"
+            try:
+                st["counters"][inst] = win32pdh.AddCounter(hq, path)
+            except Exception:
+                pass
+        st["built_at"] = time.time()
+        # Warm up so the first read after a rebuild already has a baseline.
+        try:
+            win32pdh.CollectQueryData(hq)
+            time.sleep(0.15)
+            win32pdh.CollectQueryData(hq)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _get_gpu_engine_3d_utils():
+    """Return {luid_key: max 3D util%} via the Windows GPU Engine counters.
+
+    Vendor-agnostic. The PDH utilization counter needs two collection samples;
+    since the monitor loop calls this about once a second, values represent
+    roughly the last-second average. Falls back to the WMI enumeration when
+    pywin32 is unavailable, and to an empty dict on any failure.
+    """
+    now = time.time()
+    if now - _gpu_engine_cache["t"] < _SLOW_TTL:
+        return _gpu_engine_cache["v"]
+
+    utils = {}
+    try:
+        if _HAS_PDH:
+            st = _pdh_state
+            if st["query"] is None or now - st["built_at"] > _PDH_REBUILD_TTL:
+                _pdh_build_query()
+            if st["query"] is not None:
+                win32pdh.CollectQueryData(st["query"])
+                for inst, hc in st["counters"].items():
+                    try:
+                        _, val = win32pdh.GetFormattedCounterValue(hc, win32pdh.PDH_FMT_DOUBLE)
+                    except Exception:
+                        continue
+                    m = _ENGINE_NAME_RE.match(inst)
+                    if not m:
+                        continue
+                    v = int(round(val))
+                    key = m.group(1)
+                    utils[key] = max(utils.get(key, 0), v)
+            # PDH path (even when empty on the very first sample) is
+            # authoritative; never fall through to the slow WMI cold start.
+            _gpu_engine_cache["t"] = now
+            _gpu_engine_cache["v"] = utils
+            return utils
+        # WMI fallback only when pywin32 is unavailable (slow cold start)
+        pythoncom.CoInitialize()
+        c = wmi.WMI(namespace=r"root/cimv2")
+        for e in c.Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine():
+            m = _ENGINE_NAME_RE.match(e.Name)
+            if not m:
+                continue
+            key = m.group(1)
+            try:
+                v = int(e.UtilizationPercentage)
+            except (TypeError, ValueError):
+                v = 0
+            utils[key] = max(utils.get(key, 0), v)
+    except Exception:
+        pass
+    _gpu_engine_cache["t"] = now
+    _gpu_engine_cache["v"] = utils
+    return utils
+
+
+def _list_phys_gpus():
+    """Enumerate physical GPUs (virtual/remote filtered) with VRAM + display flag."""
+    gpus = []
+    try:
+        pythoncom.CoInitialize()
+        c = wmi.WMI()
+        for gpu in c.Win32_VideoController():
+            name = gpu.Name or ""
+            if "virtual" in name.lower() or "remote" in name.lower():
+                continue
+            raw_ram = int(gpu.AdapterRAM) if gpu.AdapterRAM else 0
+            if raw_ram < 0:
+                raw_ram += 2**32
+            gpus.append({
+                "name": name,
+                "vram_mb": raw_ram // (1024 * 1024),
+            })
+    except Exception:
+        pass
+    return gpus
+
+
+def _build_engine_gpu(util_pct, phys):
+    """Build a GPU stats dict from GPU Engine / WMI data (non-NVIDIA path).
+
+    Utilization comes from the perf counters; temperature, clock and VRAM
+    usage have no public API on non-NVIDIA GPUs -> -1 / 0.
+    """
+    g = phys[0] if phys else {"name": "GPU", "vram_mb": 0}
+    return {
+        "name": g["name"],
+        "gpu_percent": util_pct,
+        "mem_percent": -1,
+        "temp_c": -1,
+        "clock_mhz": -1,
+        "mem_used_mb": 0,
+        "mem_total_mb": g["vram_mb"],
+    }
+
+
 def _get_igpu_realtime():
-    """Fallback: monitor integrated GPU via WMI when no NVIDIA GPU is present."""
+    """Final fallback: report the display-driving GPU with VRAM only."""
     try:
         pythoncom.CoInitialize()
         c = wmi.WMI()
@@ -250,17 +412,22 @@ def _get_igpu_realtime():
 
 
 def get_gpu_realtime():
-    """Query GPU for real-time monitoring.
-    Hybrid/dGPU mode -> use NVIDIA via NVML.
-    iGPU-only mode   -> use display-driving GPU via WMI.
+    """Monitor GPU in real time.
+
+    1. NVIDIA GPU present & NVML available -> full NVML data
+       (util / temp / clock / VRAM usage). The dGPU is always reported when
+       NVML works, so discrete-only and hybrid laptops behave consistently.
+    2. Otherwise (iGPU-only machines, AMD/Intel dGPU, or NVML unavailable)
+       -> Windows GPU Engine perf counters (3D utilization, vendor-agnostic)
+       + WMI VRAM total; temp / clock / VRAM usage stay -1 (no public API
+       for non-NVIDIA GPUs).
     """
-    gpus = []
-    # Try NVIDIA dGPU first via NVML (initialized once per process)
+    # Path 1: NVIDIA via NVML
     if _ensure_nvml():
         try:
             count = pynvml.nvmlDeviceGetCount()
-            for i in range(count):
-                h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            if count > 0:
+                h = pynvml.nvmlDeviceGetHandleByIndex(0)
                 name_raw = pynvml.nvmlDeviceGetName(h)
                 name = name_raw.decode("utf-8") if isinstance(name_raw, bytes) else name_raw
                 util = pynvml.nvmlDeviceGetUtilizationRates(h)
@@ -276,7 +443,7 @@ def get_gpu_realtime():
                 mem_used_mb = mem_info.used // (1024 * 1024)
                 mem_total_mb = mem_info.total // (1024 * 1024)
                 mem_percent = round(mem_info.used / mem_info.total * 100) if mem_info.total else 0
-                gpus.append({
+                return [{
                     "name": name,
                     "gpu_percent": util.gpu,
                     "mem_percent": mem_percent,
@@ -284,14 +451,19 @@ def get_gpu_realtime():
                     "clock_mhz": clock,
                     "mem_used_mb": mem_used_mb,
                     "mem_total_mb": mem_total_mb,
-                })
+                }]
         except Exception:
             pass
 
-    # No NVIDIA GPU found -> fall back to iGPU via WMI
-    if not gpus:
-        gpus = _get_igpu_realtime()
-    return gpus
+    # Path 2: no NVIDIA / NVML unavailable -> vendor-agnostic engine counters
+    phys = _list_phys_gpus()
+    engine_utils = _get_gpu_engine_3d_utils()
+    global_max3d = max(engine_utils.values()) if engine_utils else 0
+    if engine_utils or phys:
+        return [_build_engine_gpu(global_max3d, phys)]
+
+    # Path 3: last resort (WMI counters unavailable) -> VRAM-only report
+    return _get_igpu_realtime()
 
 
 # Short-lived caches for slow WMI readings (monitor loop refreshes ~1s;
