@@ -6,9 +6,26 @@ import csv
 import json
 import os
 import sys
+import ctypes
 import urllib.request
 from datetime import datetime
 from detector import collect_hardware, get_realtime_stats, get_system_info
+
+# Win32 constants for the always-on-top enforcement (stronger than tkinter's
+# -topmost; modern flip-model fullscreen games keep DWM composition active,
+# so a HWND_TOPMOST window stays visible on top of them).
+from ctypes import wintypes
+
+_user32 = ctypes.windll.user32
+# Explicit argtypes: without them ctypes passes HWNDs as 32-bit ints, which
+# breaks SetWindowPos on 64-bit Python (returns 0 and does nothing).
+_user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+_user32.SetWindowPos.restype = wintypes.BOOL
+_HWND_TOPMOST = wintypes.HWND(-1)
+_SWP_NOMOVE = 0x0002
+_SWP_NOSIZE = 0x0001
+_SWP_NOACTIVATE = 0x0010
 
 
 def _get_config_dir():
@@ -183,6 +200,20 @@ class FloatMonitor:
         y = event.y_root - self._drag_off[1]
         self.win.geometry(f"+{x}+{y}")
 
+    def _force_topmost(self):
+        """Re-assert topmost at the Win32 level every tick.
+
+        Games (borderless or flip-model fullscreen) often raise themselves
+        above other windows; SetWindowPos with HWND_TOPMOST pins this window
+        at the top of the Z-order. SWP_NOACTIVATE keeps the game focused.
+        """
+        try:
+            hwnd = wintypes.HWND(self.win.winfo_id())
+            _user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0,
+                                 _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE)
+        except Exception:
+            pass
+
     def update_stats(self, stats):
         """Refresh the overlay text. Called from the main thread (via after())."""
         # Guard against a queued update landing after the window was closed
@@ -191,6 +222,11 @@ class FloatMonitor:
                 return
         except tk.TclError:
             return
+
+        # Re-assert always-on-top every tick via Win32 SetWindowPos. Note:
+        # tkinter's lift() actually CLEARS WS_EX_TOPMOST on Windows, so we
+        # must not combine it with -topmost here.
+        self._force_topmost()
 
         def _num(v, default=-1):
             try:
@@ -280,6 +316,10 @@ class SysInfoApp:
         self.overlay_btn = tk.Button(toolbar, text="悬浮窗", command=self._toggle_overlay,
                                      font=("Microsoft YaHei", 12))
         self.overlay_btn.pack(side=tk.RIGHT, padx=4)
+        self.game_overlay_btn = tk.Button(toolbar, text="游戏内叠加",
+                                          command=self._inject_game_overlay,
+                                          font=("Microsoft YaHei", 12))
+        self.game_overlay_btn.pack(side=tk.RIGHT, padx=4)
         tk.Button(toolbar, text="刷新", command=self._refresh_all,
                   font=("Microsoft YaHei", 12)).pack(side=tk.RIGHT, padx=4)
         tk.Button(toolbar, text="复制全部", command=self._copy_all,
@@ -570,6 +610,63 @@ class SysInfoApp:
             self._overlay = None
         self.overlay_btn.config(text="悬浮窗")
         self.status.config(text="悬浮窗已关闭")
+
+    def _inject_game_overlay(self):
+        """Inject overlay.dll into the foreground window's process so the
+        stats can be rendered even inside exclusive-fullscreen games.
+        Experimental: requires admin privileges; actual rendering quality
+        depends on the target game's D3D implementation.
+        """
+        try:
+            import ctypes as _ct
+            from ctypes import wintypes as _wt
+            u32 = _ct.windll.user32
+            k32 = _ct.windll.kernel32
+            hwnd = u32.GetForegroundWindow()
+            if not hwnd:
+                self.status.config(text="游戏内叠加: 未找到前台窗口")
+                return
+            pid = _wt.DWORD()
+            u32.GetWindowThreadProcessId(hwnd, _ct.byref(pid))
+            if pid.value == 0:
+                self.status.config(text="游戏内叠加: 无法识别进程")
+                return
+            # Locate overlay.dll (PyInstaller onefile extracts to _MEIPASS)
+            base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            dll_path = os.path.join(base, "overlay.dll")
+            if not os.path.exists(dll_path):
+                self.status.config(text=f"游戏内叠加: 未找到 {dll_path}")
+                return
+            k32.OpenProcess.argtypes = [_wt.DWORD, _wt.BOOL, _wt.DWORD]
+            k32.OpenProcess.restype = _wt.HANDLE
+            k32.VirtualAllocEx.argtypes = [_wt.HANDLE, _wt.LPVOID, _ct.c_size_t, _wt.DWORD, _wt.DWORD]
+            k32.VirtualAllocEx.restype = _wt.LPVOID
+            k32.WriteProcessMemory.argtypes = [_wt.HANDLE, _wt.LPVOID, _wt.LPCVOID, _ct.c_size_t, _ct.POINTER(_ct.c_size_t)]
+            k32.WriteProcessMemory.restype = _wt.BOOL
+            k32.CreateRemoteThread.argtypes = [_wt.HANDLE, _wt.LPVOID, _ct.c_size_t, _wt.LPVOID, _wt.LPVOID, _wt.DWORD, _wt.LPDWORD]
+            k32.CreateRemoteThread.restype = _wt.HANDLE
+            k32.GetModuleHandleW.argtypes = [_wt.LPCWSTR]
+            k32.GetModuleHandleW.restype = _wt.HMODULE
+            k32.GetProcAddress.argtypes = [_wt.HMODULE, _wt.LPCSTR]
+            k32.GetProcAddress.restype = _wt.LPVOID
+            proc = k32.OpenProcess(0x1F0FFF, False, pid.value)
+            if not proc:
+                self.status.config(text="游戏内叠加: OpenProcess 失败(需要管理员权限?)")
+                return
+            path_bytes = dll_path.encode('utf-16-le') + b'\x00\x00'
+            buf = k32.VirtualAllocEx(proc, None, len(path_bytes), 0x3000, 0x04)
+            if not buf:
+                k32.CloseHandle(proc)
+                self.status.config(text="游戏内叠加: VirtualAllocEx 失败")
+                return
+            written = _ct.c_size_t()
+            k32.WriteProcessMemory(proc, buf, path_bytes, len(path_bytes), _ct.byref(written))
+            loadlib = k32.GetProcAddress(k32.GetModuleHandleW('kernel32.dll'), b'LoadLibraryW')
+            tid = k32.CreateRemoteThread(proc, None, 0, loadlib, buf, 0, None)
+            k32.CloseHandle(tid); k32.CloseHandle(proc)
+            self.status.config(text=f"游戏内叠加: 已注入 PID {pid.value}")
+        except Exception as e:
+            self.status.config(text=f"游戏内叠加失败: {e}")
 
     def _update_monitor(self, stats):
         self.cpu_bar_set(stats["cpu_percent"])
