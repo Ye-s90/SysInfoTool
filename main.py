@@ -670,7 +670,17 @@ class SysInfoApp:
 
     def _update_monitor(self, stats):
         self.cpu_bar_set(stats["cpu_percent"])
-        self.cpu_freq_lbl.config(text=f"{stats['cpu_temp_c']} °C / {stats['cpu_freq_mhz']} MHz")
+        # Annotate the temp source: LHM = accurate hardware-monitor reading;
+        # 热区 = motherboard thermal-zone sensor (approximate, may differ from
+        # the real core temperature by several degrees).
+        _src = stats.get("cpu_temp_source", "")
+        _tag = ""
+        if _src.startswith("LHM"):
+            _tag = ""
+        elif "热区" in _src:
+            _tag = "热区"
+        self.cpu_freq_lbl.config(
+            text=f"{stats['cpu_temp_c']} °C{('(' + _tag + ')') if _tag else ''} / {stats['cpu_freq_mhz']} MHz")
 
         # GPU — build once, update values in place
         # Only mark built when there is actually a GPU to build for;

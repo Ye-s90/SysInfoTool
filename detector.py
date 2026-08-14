@@ -482,46 +482,82 @@ def _cache_result(cache, now, value):
 
 
 def _get_cpu_temp():
-    """Read CPU temperature. Tries multiple methods for Intel/AMD compatibility."""
+    """Read CPU temperature with a smart fallback chain.
+
+    Returns (celsius, source). Priority:
+      1. LibreHardwareMonitor / OpenHardwareMonitor WMI — the only accurate
+         source for real CPU core/package temperature (Tctl/Tdie on AMD,
+         package/core on Intel). Requires the monitor app to be running.
+      2. ACPI thermal zones (MSAcpi) — motherboard thermal-zone sensors, NOT
+         the CPU core; may need admin privileges. All zones are scanned and
+         the highest reading is used (the zone nearest the CPU is hottest).
+      3. ThermalZone perf counter — same thermal-zone data, last resort.
+    """
     now = time.time()
     if now - _cpu_temp_cache["t"] < _SLOW_TTL:
         return _cpu_temp_cache["v"]
 
     pythoncom.CoInitialize()
 
-    # Method 1: MSAcpi_ThermalZoneTemperature (most accurate, may need admin)
+    # Method 1: LibreHardwareMonitor / OpenHardwareMonitor WMI (accurate)
+    for ns in (r"root/LibreHardwareMonitor", r"root/OpenHardwareMonitor"):
+        try:
+            c = wmi.WMI(namespace=ns)
+            temps = [(s.Name, float(s.Value)) for s in c.Sensor()
+                     if s.SensorType == "Temperature"
+                     and s.Value is not None
+                     and "cpu" in (s.Name or "").lower()]
+            if temps:
+                # Prefer package-level sensors (Tctl/Tdie/CPU Package/Core)
+                def _key(item):
+                    n = item[0].lower()
+                    if any(k in n for k in ("package", "tctl", "tdie", "core")):
+                        return 0
+                    return 1
+                temps.sort(key=_key)
+                name, val = temps[0]
+                if 0 < val < 120:
+                    return _cache_result(_cpu_temp_cache, now,
+                                         (round(val, 1), f"LHM:{name}"))
+        except Exception:
+            pass
+
+    # Method 2: ACPI thermal zones (may need admin). Take the highest zone
+    # reading as the closest approximation of CPU temp.
     try:
         c = wmi.WMI(namespace=r"root/wmi")
+        best = None
         for t in c.MSAcpi_ThermalZoneTemperature():
             val = int(t.CurrentTemperature)
             celsius = (val - 2732) / 10.0
             if 0 < celsius < 150:
-                return _cache_result(_cpu_temp_cache, now, round(celsius, 1))
+                if best is None or celsius > best[1]:
+                    best = (t.InstanceName, celsius)
+        if best:
+            return _cache_result(_cpu_temp_cache, now,
+                                 (round(best[1], 1), f"热区:{best[0]}"))
     except Exception:
         pass
 
-    # Method 2: ThermalZone perf counter (unit: tenths of Kelvin)
+    # Method 3: ThermalZone perf counter (unit: tenths of Kelvin). Same
+    # thermal-zone data; scan all zones and keep the highest.
     try:
         c = wmi.WMI(namespace=r"root/cimv2")
+        best = None
         for t in c.Win32_PerfFormattedData_Counters_ThermalZoneInformation():
             val = int(t.HighPrecisionTemperature)
             if val > 0:
                 celsius = val / 10.0 - 273.15
                 if 0 < celsius < 150:
-                    return _cache_result(_cpu_temp_cache, now, round(celsius, 1))
+                    if best is None or celsius > best[1]:
+                        best = (t.Name, celsius)
+        if best:
+            return _cache_result(_cpu_temp_cache, now,
+                                 (round(best[1], 1), f"热区:{best[0]}"))
     except Exception:
         pass
 
-    # Method 3: OpenHardwareMonitor WMI namespace (if OHM is running)
-    try:
-        c = wmi.WMI(namespace=r"root/OpenHardwareMonitor")
-        for sensor in c.Sensor():
-            if sensor.SensorType == "Temperature" and "CPU" in sensor.Name:
-                return _cache_result(_cpu_temp_cache, now, round(float(sensor.Value), 1))
-    except Exception:
-        pass
-
-    return _cache_result(_cpu_temp_cache, now, 0)
+    return _cache_result(_cpu_temp_cache, now, (0, "N/A"))
 
 
 def _get_cpu_freq_mhz():
@@ -573,7 +609,7 @@ def get_realtime_stats():
     # (first call yields 0.0). Saves ~0.3s of blocking per monitor tick.
     cpu_percent = psutil.cpu_percent(interval=None, percpu=False)
     cpu_freq_current = _get_cpu_freq_mhz()
-    cpu_temp = _get_cpu_temp()
+    cpu_temp, cpu_temp_source = _get_cpu_temp()
     mem_freq = _get_mem_freq()
     fps = round(_fps_counter.get_fps()) if _HAS_MSS else -1
 
@@ -601,6 +637,7 @@ def get_realtime_stats():
         "cpu_percent": cpu_percent,
         "cpu_freq_mhz": cpu_freq_current,
         "cpu_temp_c": cpu_temp,
+        "cpu_temp_source": cpu_temp_source,
         "mem_total_gb": round(mem.total / (1024**3), 1),
         "mem_used_gb": round(mem.used / (1024**3), 1),
         "mem_percent": mem.percent,
