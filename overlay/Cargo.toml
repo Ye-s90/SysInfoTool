@@ -1,0 +1,10 @@
+[package]
+name = "overlay"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# 零第三方依赖:全部 Win32/D3D11 调用手写 FFI 绑定
